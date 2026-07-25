@@ -50,7 +50,9 @@ const blank: FormValues = {
   notes: '',
 };
 
-const incomeFields: Array<{ name: keyof FormValues; label: string }> = [
+type MoneyField = Exclude<keyof FormValues, 'employee_id' | 'period' | 'notes'>;
+
+const incomeFields: Array<{ name: MoneyField; label: string }> = [
   { name: 'basic_salary', label: 'Gaji Pokok' },
   { name: 'fixed_allowance', label: 'Tunjangan Tetap' },
   { name: 'variable_allowance', label: 'Tunjangan Tidak Tetap' },
@@ -60,7 +62,7 @@ const incomeFields: Array<{ name: keyof FormValues; label: string }> = [
   { name: 'thr', label: 'THR' },
 ];
 
-const deductionFields: Array<{ name: keyof FormValues; label: string }> = [
+const deductionFields: Array<{ name: MoneyField; label: string }> = [
   { name: 'deduction', label: 'Potongan' },
   { name: 'loan', label: 'Kasbon' },
   { name: 'bpjs', label: 'BPJS' },
