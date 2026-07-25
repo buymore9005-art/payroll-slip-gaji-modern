@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { logActivity } from '@/services/activity.service';
 import type { PayrollDetailRow, PayrollStatus, VerifiedPayslip } from '@/types/database';
-import type { PayrollFilters, PayrollInput } from '@/types/domain';
+import type { BulkPayrollResult, PayrollFilters, PayrollInput } from '@/types/domain';
 
 export async function listPayrolls(filters: PayrollFilters = {}): Promise<PayrollDetailRow[]> {
   let query = supabase.from('v_payroll_details').select('*')
@@ -69,4 +69,41 @@ export async function verifyPayslip(slipNumber:string,token:string):Promise<Veri
   });
   if (error) throw new Error(error.message);
   return data as VerifiedPayslip|null;
+}
+
+
+export async function duplicatePayroll(row: PayrollDetailRow, period: string) {
+  const { data, error } = await supabase.rpc('duplicate_payroll', {
+    p_source_id: row.id,
+    p_period: period,
+  });
+  if (error) throw new Error(error.message);
+  return String(data);
+}
+
+export async function recalculatePayroll(row: PayrollDetailRow) {
+  const { error } = await supabase.rpc('recalculate_payroll', {
+    p_payroll_id: row.id,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function bulkUpdatePayrollStatus(
+  ids: string[],
+  status: Extract<PayrollStatus, 'draft' | 'finalized' | 'paid'>,
+): Promise<BulkPayrollResult> {
+  const { data, error } = await supabase.rpc('bulk_update_payroll_status', {
+    p_ids: ids,
+    p_status: status,
+  });
+  if (error) throw new Error(error.message);
+  return data as BulkPayrollResult;
+}
+
+export async function bulkDeletePayrolls(ids: string[]): Promise<BulkPayrollResult> {
+  const { data, error } = await supabase.rpc('bulk_delete_payrolls', {
+    p_ids: ids,
+  });
+  if (error) throw new Error(error.message);
+  return data as BulkPayrollResult;
 }
