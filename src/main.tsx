@@ -6,6 +6,7 @@ import App from '@/App';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
+import { I18nProvider } from '@/i18n/I18nContext';
 import { useTheme } from '@/hooks/useTheme';
 import { queryClient } from '@/lib/queryClient';
 import '@/styles/index.css';
@@ -34,9 +35,11 @@ if (!container) throw new Error('Root element tidak ditemukan.');
 createRoot(container).render(
   <StrictMode>
     <ErrorBoundary>
-      <ThemeProvider>
-        <ApplicationProviders />
-      </ThemeProvider>
+      <I18nProvider>
+        <ThemeProvider>
+          <ApplicationProviders />
+        </ThemeProvider>
+      </I18nProvider>
     </ErrorBoundary>
   </StrictMode>,
 );
