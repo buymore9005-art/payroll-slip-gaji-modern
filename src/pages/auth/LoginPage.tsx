@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { LockKeyhole, LogIn, Mail } from 'lucide-react';
 import { useForm } from 'react-hook-form';
@@ -11,8 +11,11 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/hooks/useAuth';
+import { queryClient } from '@/lib/queryClient';
 import { getErrorMessage } from '@/lib/utils';
 import { signIn } from '@/services/auth.service';
+import { getDashboardSummary } from '@/services/dashboard.service';
+import { currentPeriod } from '@/utils/format';
 
 const schema = z.object({
   email: z.string().email('Email tidak valid.'),
@@ -21,25 +24,48 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function LoginPage() {
-  const { session } = useAuth();
+  const { session, profile, status } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { email: '', password: '' } });
+  const navigated = useRef(false);
+  const form = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { email: '', password: '' },
+  });
 
   useEffect(() => {
-    if (session) navigate('/app/dashboard', { replace: true });
-  }, [navigate, session]);
+    void import('@/pages/DashboardPage');
+  }, []);
+
+  useEffect(() => {
+    if (
+      navigated.current
+      || status !== 'authenticated'
+      || !session
+      || !profile
+    ) return;
+
+    navigated.current = true;
+    const destination = (location.state as { from?: string } | null)?.from || '/app/dashboard';
+    void queryClient.prefetchQuery({
+      queryKey: ['dashboard', currentPeriod()],
+      queryFn: () => getDashboardSummary(currentPeriod()),
+      staleTime: 2 * 60_000,
+    }).finally(() => {
+      navigate(destination, { replace: true });
+    });
+  }, [location.state, navigate, profile, session, status]);
 
   const submit = form.handleSubmit(async values => {
     try {
       await signIn(values.email, values.password);
       toast.success('Selamat datang kembali.');
-      const state = location.state as { from?: string } | null;
-      navigate(state?.from || '/app/dashboard', { replace: true });
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
   });
+
+  const redirecting = status === 'authenticated' && Boolean(session && profile);
 
   return (
     <AuthShell>
@@ -71,8 +97,13 @@ export default function LoginPage() {
               Lupa kata sandi?
             </Link>
           </div>
-          <Button type="submit" className="w-full" size="lg" loading={form.formState.isSubmitting}>
-            Masuk <LogIn className="size-4" />
+          <Button
+            type="submit"
+            className="w-full"
+            size="lg"
+            loading={form.formState.isSubmitting || redirecting}
+          >
+            {redirecting ? 'Sedang memuat...' : 'Masuk'} <LogIn className="size-4" />
           </Button>
         </form>
         <p className="mt-6 text-center text-sm text-slate-500 dark:text-slate-400">
