@@ -74,6 +74,13 @@ textarea:focus-visible {
 
   .data-table tbody tr {
     @apply transition-all duration-200 hover:bg-brand-50/50 dark:hover:bg-brand-950/20;
+    content-visibility: auto;
+    contain-intrinsic-size: 56px;
+  }
+
+  .table-scroll {
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
 
   .page-enter {
