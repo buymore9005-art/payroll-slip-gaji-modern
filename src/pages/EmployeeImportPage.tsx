@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -6,43 +6,39 @@ import {
   Download,
   FileSpreadsheet,
   RefreshCcw,
-  UploadCloud,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ImportDropzone } from '@/components/import/ImportDropzone';
+import { ImportSummaryCards } from '@/components/import/ImportSummaryCards';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { ProgressBar } from '@/components/ui/ProgressBar';
-import { useAuth } from '@/hooks/useAuth';
 import { getErrorMessage } from '@/lib/utils';
 import {
   executeEmployeeImport,
   parseEmployeeWorkbook,
-  type ImportExecutionResult,
 } from '@/services/import.service';
-import type { ImportValidationResult } from '@/types/domain';
+import type { ImportBatchResult, ImportValidationResult } from '@/types/domain';
 import { formatCurrency } from '@/utils/format';
 
 export default function EmployeeImportPage() {
-  const { user } = useAuth();
   const queryClient = useQueryClient();
-  const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [validation, setValidation] = useState<ImportValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<ImportExecutionResult | null>(null);
+  const [result, setResult] = useState<ImportBatchResult | null>(null);
 
   const reset = () => {
     setFile(null);
     setValidation(null);
     setResult(null);
     setProgress(0);
-    if (inputRef.current) inputRef.current.value = '';
   };
 
   const selectFile = async (selected: File | null) => {
@@ -55,21 +51,20 @@ export default function EmployeeImportPage() {
       const next = await parseEmployeeWorkbook(selected);
       setValidation(next);
       if (next.errors.length) {
-        toast.warning(`${next.errors.length} baris perlu diperbaiki. Baris valid tetap dapat diimport.`);
+        toast.warning(`${next.errors.length} baris perlu diperbaiki.`);
       } else {
         toast.success(`${next.validRows.length} baris valid dan siap diimport.`);
       }
     } catch (error) {
       setFile(null);
       toast.error(getErrorMessage(error));
-      if (inputRef.current) inputRef.current.value = '';
     } finally {
       setValidating(false);
     }
   };
 
   const execute = async () => {
-    if (!file || !validation?.validRows.length || !user) return;
+    if (!file || !validation?.validRows.length) return;
     setConfirmOpen(false);
     setImporting(true);
     setProgress(0);
@@ -77,14 +72,15 @@ export default function EmployeeImportPage() {
       const next = await executeEmployeeImport({
         rows: validation.validRows,
         fileName: file.name,
-        userId: user.id,
         onProgress: setProgress,
       });
       setResult(next);
-      await queryClient.invalidateQueries({ queryKey: ['employees'] });
-      await queryClient.invalidateQueries({ queryKey: ['organization'] });
-      await queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      toast.success(`Import selesai: ${next.success} berhasil, ${next.failed} gagal.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['employees'] }),
+        queryClient.invalidateQueries({ queryKey: ['organization'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      ]);
+      toast.success(`${next.success} berhasil, ${next.failed} gagal, ${next.skipped} dilewati`);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -96,7 +92,7 @@ export default function EmployeeImportPage() {
     <>
       <PageHeader
         title="Import Data Karyawan"
-        description="Unduh template resmi, isi data, validasi otomatis, periksa preview, lalu import massal ke Supabase."
+        description="Unduh template resmi, validasi otomatis, periksa preview, lalu commit massal secara transaksional."
         actions={
           <a href="/templates/template-import-karyawan.xlsx" download>
             <Button variant="secondary"><Download className="size-4" /> Download Template</Button>
@@ -109,42 +105,33 @@ export default function EmployeeImportPage() {
           <CardHeader>
             <div>
               <h2 className="font-extrabold">Unggah Excel</h2>
-              <p className="mt-1 text-xs text-slate-500">Gunakan template .xlsx yang tersedia.</p>
+              <p className="mt-1 text-xs text-slate-500">Update berdasarkan NIK; data baru otomatis ditambahkan.</p>
             </div>
           </CardHeader>
-          <CardContent>
-            <label className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50/70 p-8 text-center transition hover:border-brand-400 hover:bg-brand-50/50 dark:border-slate-700 dark:bg-slate-950/30 dark:hover:border-brand-600">
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                disabled={importing || validating}
-                onChange={event => void selectFile(event.target.files?.[0] ?? null)}
-              />
-              <div className="rounded-2xl bg-brand-100 p-4 text-brand-600 dark:bg-brand-950/60 dark:text-brand-300">
-                <UploadCloud className="size-8" />
-              </div>
-              <p className="mt-4 font-bold">{validating ? 'Memvalidasi file...' : file?.name ?? 'Pilih atau jatuhkan file Excel'}</p>
-              <p className="mt-2 text-xs leading-5 text-slate-500">Maksimal 10 MB. Sheet pertama harus memakai kolom template persis.</p>
-            </label>
-
+          <CardContent className="space-y-5">
+            <ImportDropzone
+              inputId="employee-import-file"
+              file={file}
+              busy={validating || importing}
+              onFile={selected => void selectFile(selected)}
+            />
             {validation && (
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <div className="rounded-2xl bg-emerald-50 p-4 dark:bg-emerald-950/30">
-                  <p className="text-xs font-bold text-emerald-600">BARIS VALID</p>
-                  <p className="mt-1 text-2xl font-black text-emerald-700 dark:text-emerald-300">{validation.validRows.length}</p>
-                </div>
-                <div className="rounded-2xl bg-rose-50 p-4 dark:bg-rose-950/30">
-                  <p className="text-xs font-bold text-rose-600">BARIS ERROR</p>
-                  <p className="mt-1 text-2xl font-black text-rose-700 dark:text-rose-300">{validation.errors.length}</p>
-                </div>
+              <ImportSummaryCards
+                valid={validation.validRows.length}
+                errors={validation.errors.length}
+                skipped={result?.skipped ?? 0}
+              />
+            )}
+            {importing && <ProgressBar value={progress} label="Import Progress" />}
+            {result && (
+              <div className="rounded-2xl bg-emerald-50 p-4 dark:bg-emerald-950/25">
+                <p className="font-bold text-emerald-700 dark:text-emerald-300">Import selesai</p>
+                <p className="mt-1 text-sm text-emerald-700/80 dark:text-emerald-300/80">
+                  {result.success} berhasil · {result.failed} gagal · {result.skipped} dilewati
+                </p>
               </div>
             )}
-
-            {importing && <div className="mt-5"><ProgressBar value={progress} label="Mengimport karyawan" /></div>}
-
-            <div className="mt-5 flex gap-3">
+            <div className="flex gap-3">
               <Button
                 className="flex-1"
                 disabled={!validation?.validRows.length || importing}
@@ -166,7 +153,7 @@ export default function EmployeeImportPage() {
           <CardHeader>
             <div>
               <h2 className="font-extrabold">Preview & Validasi</h2>
-              <p className="mt-1 text-xs text-slate-500">Periksa hasil sebelum data dikirim ke database.</p>
+              <p className="mt-1 text-xs text-slate-500">Database akan rollback seluruh transaksi bila validasi server gagal.</p>
             </div>
             {result && <Badge variant={result.failed ? 'warning' : 'success'}>{result.success} berhasil</Badge>}
           </CardHeader>
@@ -174,7 +161,7 @@ export default function EmployeeImportPage() {
             <div className="flex min-h-96 flex-col items-center justify-center p-8 text-center">
               <FileSpreadsheet className="size-12 text-slate-300" />
               <p className="mt-4 font-bold text-slate-600 dark:text-slate-300">Belum ada file untuk dipreview</p>
-              <p className="mt-2 max-w-sm text-sm text-slate-500">File akan diperiksa untuk kolom wajib, format angka, email, dan duplikasi NIK.</p>
+              <p className="mt-2 max-w-sm text-sm text-slate-500">File diperiksa untuk kolom wajib, format angka, email, dan duplikasi NIK.</p>
             </div>
           ) : (
             <div className="max-h-[650px] overflow-auto">
@@ -184,13 +171,12 @@ export default function EmployeeImportPage() {
                     <AlertCircle className="size-5" /> Baris yang tidak akan diimport
                   </div>
                   <div className="space-y-2">
-                    {validation.errors.slice(0, 20).map(error => (
+                    {validation.errors.slice(0, 30).map(error => (
                       <div key={error.rowNumber} className="rounded-xl bg-white p-3 text-xs dark:bg-slate-900">
                         <span className="font-bold">Baris {error.rowNumber} {error.nik && `· ${error.nik}`}</span>
                         <span className="ml-2 text-rose-600">{error.messages.join(' ')}</span>
                       </div>
                     ))}
-                    {validation.errors.length > 20 && <p className="text-xs text-rose-600">+ {validation.errors.length - 20} error lainnya.</p>}
                   </div>
                 </div>
               )}
@@ -205,15 +191,11 @@ export default function EmployeeImportPage() {
                   {validation.validRows.map(row => (
                     <tr key={row.rowNumber}>
                       <td><CheckCircle2 className="size-5 text-emerald-500" /></td>
-                      <td>{row.rowNumber}</td>
-                      <td className="font-mono text-xs">{row.nik}</td>
-                      <td className="font-bold">{row.name}</td>
-                      <td>{row.position}</td>
-                      <td>{row.division}</td>
-                      <td>{row.department}</td>
+                      <td>{row.rowNumber}</td><td className="font-mono text-xs">{row.nik}</td>
+                      <td className="font-bold">{row.name}</td><td>{row.position}</td>
+                      <td>{row.division}</td><td>{row.department}</td>
                       <td>{row.bankName} · {row.bankAccount}</td>
-                      <td>{formatCurrency(row.basicSalary)}</td>
-                      <td>{formatCurrency(row.allowance)}</td>
+                      <td>{formatCurrency(row.basicSalary)}</td><td>{formatCurrency(row.allowance)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -226,7 +208,7 @@ export default function EmployeeImportPage() {
       <ConfirmDialog
         open={confirmOpen}
         title="Mulai import massal?"
-        description={`${validation?.validRows.length ?? 0} baris valid akan di-upsert berdasarkan NIK. Data dengan NIK yang sudah ada akan diperbarui; divisi, departemen, dan jabatan baru dibuat otomatis.`}
+        description={`${validation?.validRows.length ?? 0} baris valid akan diproses dalam satu transaksi. NIK lama diperbarui, NIK baru ditambahkan, dan data identik dilewati.`}
         confirmLabel="Mulai Import"
         variant="primary"
         loading={importing}

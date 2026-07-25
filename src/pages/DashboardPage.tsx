@@ -1,9 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import {
+  Activity,
+  Archive,
   Banknote,
   CalendarDays,
+  Clock3,
   Gift,
   ReceiptText,
+  UserPlus,
   Users,
   WalletCards,
 } from 'lucide-react';
@@ -22,11 +27,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { ExportMenu } from '@/components/common/ExportMenu';
 import { PageHeader } from '@/components/common/PageHeader';
 import { StatCard } from '@/components/common/StatCard';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { currentPeriod, formatCurrency, formatNumber, formatPeriod } from '@/utils/format';
+import { currentPeriod, formatCurrency, formatNumber, formatPeriod, formatRelativeTime } from '@/utils/format';
 import { getDashboardSummary } from '@/services/dashboard.service';
 
 const pieColors = ['#4f46e5', '#7c3aed', '#0891b2', '#059669', '#d97706', '#e11d48'];
@@ -38,7 +44,7 @@ function ChartCard({
 }: {
   title: string;
   description: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <Card className="overflow-hidden">
@@ -89,6 +95,22 @@ export default function DashboardPage() {
       <PageHeader
         title="Dashboard Payroll"
         description={`Pantau karyawan, beban gaji, bonus, potongan, dan kehadiran periode ${formatPeriod(period)}.`}
+        actions={
+          <ExportMenu
+            options={{
+              rows: monthly,
+              columns: [
+                { label: 'Periode', value: row => formatPeriod(row.period) },
+                { label: 'Pengeluaran', value: row => row.expense },
+                { label: 'Bonus', value: row => row.bonus },
+                { label: 'Potongan', value: row => row.deductions },
+              ],
+              fileName: `dashboard-payroll-${period.slice(0, 7)}`,
+              title: 'Laporan Dashboard Payroll',
+              entityType: 'dashboard',
+            }}
+          />
+        }
       />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -97,6 +119,89 @@ export default function DashboardPage() {
         <StatCard index={2} label="Pengeluaran Gaji" value={formatCurrency(data.total_salary_expense)} description="Akumulasi periode ini" icon={WalletCards} />
         <StatCard index={3} label="Total Bonus" value={formatCurrency(data.total_bonus)} description="Bonus periode ini" icon={Gift} />
         <StatCard index={4} label="Total Potongan" value={formatCurrency(data.total_deductions)} description="Seluruh komponen potongan" icon={Banknote} />
+      </section>
+
+      <section className="mt-6 grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <div>
+              <h2 className="font-extrabold">Ringkasan Karyawan</h2>
+              <p className="mt-1 text-xs text-slate-500">Status tenaga kerja periode berjalan.</p>
+            </div>
+            <Users className="size-5 text-brand-500" />
+          </CardHeader>
+          <CardContent className="grid grid-cols-3 gap-3">
+            <div className="rounded-2xl bg-emerald-50 p-4 dark:bg-emerald-950/25">
+              <Users className="size-4 text-emerald-600" />
+              <p className="mt-2 text-2xl font-black">{formatNumber(data.employee_summary?.active ?? data.total_employees)}</p>
+              <p className="text-xs text-slate-500">Aktif</p>
+            </div>
+            <div className="rounded-2xl bg-amber-50 p-4 dark:bg-amber-950/25">
+              <Archive className="size-4 text-amber-600" />
+              <p className="mt-2 text-2xl font-black">{formatNumber(data.employee_summary?.archived ?? 0)}</p>
+              <p className="text-xs text-slate-500">Diarsipkan</p>
+            </div>
+            <div className="rounded-2xl bg-brand-50 p-4 dark:bg-brand-950/25">
+              <UserPlus className="size-4 text-brand-600" />
+              <p className="mt-2 text-2xl font-black">{formatNumber(data.employee_summary?.new_this_month ?? 0)}</p>
+              <p className="text-xs text-slate-500">Karyawan Baru</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div>
+              <h2 className="font-extrabold">Ringkasan Payroll</h2>
+              <p className="mt-1 text-xs text-slate-500">Lifecycle payroll bulan ini.</p>
+            </div>
+            <WalletCards className="size-5 text-brand-500" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {[
+              ['Draft', data.payroll_summary?.draft ?? 0, 'bg-slate-200 dark:bg-slate-700'],
+              ['Final', data.payroll_summary?.finalized ?? 0, 'bg-brand-500'],
+              ['Dibayar', data.payroll_summary?.paid ?? 0, 'bg-emerald-500'],
+            ].map(([label, value, color]) => {
+              const total = Math.max(1, Number(data.payroll_summary?.draft ?? 0) + Number(data.payroll_summary?.finalized ?? 0) + Number(data.payroll_summary?.paid ?? 0));
+              return (
+                <div key={String(label)}>
+                  <div className="mb-1 flex justify-between text-xs font-bold"><span>{label}</span><span>{formatNumber(Number(value))}</span></div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                    <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(100, Number(value) / total * 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div>
+              <h2 className="font-extrabold">Ringkasan Kehadiran</h2>
+              <p className="mt-1 text-xs text-slate-500">Akumulasi hari dan lembur.</p>
+            </div>
+            <Clock3 className="size-5 text-brand-500" />
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-3">
+            {[
+              ['Hadir', data.attendance_summary?.present ?? 0],
+              ['Sakit', data.attendance_summary?.sick ?? 0],
+              ['Izin', data.attendance_summary?.leave ?? 0],
+              ['Alpa', data.attendance_summary?.absent ?? 0],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-800/60">
+                <p className="text-xs text-slate-500">{String(label)}</p>
+                <p className="mt-1 text-xl font-black">{formatNumber(Number(value))}</p>
+              </div>
+            ))}
+            <div className="col-span-2 rounded-2xl bg-cyan-50 p-3 dark:bg-cyan-950/25">
+              <p className="text-xs text-cyan-700 dark:text-cyan-300">Jam Lembur</p>
+              <p className="mt-1 text-xl font-black">{formatNumber(data.attendance_summary?.overtime ?? 0)}</p>
+            </div>
+          </CardContent>
+        </Card>
       </section>
 
       <section className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_.6fr]">
@@ -198,6 +303,35 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      <Card className="mt-6">
+        <CardHeader>
+          <div>
+            <h2 className="font-extrabold">Aktivitas Terbaru</h2>
+            <p className="mt-1 text-xs text-slate-500">Login, import, export, update, delete, dan generate payroll terbaru.</p>
+          </div>
+          <Activity className="size-5 text-brand-500" />
+        </CardHeader>
+        <CardContent className="divide-y divide-slate-100 p-0 dark:divide-slate-800">
+          {(data.recent_activity ?? []).length ? data.recent_activity.map(item => (
+            <div key={item.id} className="flex items-start gap-4 px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-800/50">
+              <div className="mt-0.5 rounded-xl bg-brand-50 p-2 text-brand-600 dark:bg-brand-950/40 dark:text-brand-300">
+                <Activity className="size-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-bold">{item.action} · {item.entity_type}</p>
+                  <p className="text-xs text-slate-500">{formatRelativeTime(item.created_at)}</p>
+                </div>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{item.description}</p>
+                <p className="mt-1 text-xs text-slate-500">{item.user_name ?? 'Sistem'}</p>
+              </div>
+            </div>
+          )) : (
+            <p className="p-8 text-center text-sm text-slate-500">Tidak ada aktivitas terbaru.</p>
+          )}
+        </CardContent>
+      </Card>
     </>
   );
 }

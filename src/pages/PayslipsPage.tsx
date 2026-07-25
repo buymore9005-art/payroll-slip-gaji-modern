@@ -25,6 +25,12 @@ import { Modal } from '@/components/ui/Modal';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { Select } from '@/components/ui/Select';
 import { TableSkeleton } from '@/components/ui/Skeleton';
+import {
+  ColumnVisibilityMenu,
+  ResizableSortHeader,
+  TablePagination,
+} from '@/components/ui/TableTools';
+import { useDataTable, type TableColumn } from '@/hooks/useDataTable';
 import { useDebounce } from '@/hooks/useDebounce';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useSignedUrl } from '@/hooks/useSignedUrl';
@@ -78,6 +84,16 @@ export default function PayslipsPage() {
     () => (payrolls.data ?? []).filter(row => row.status === 'finalized' || row.status === 'paid'),
     [payrolls.data],
   );
+
+  type ColumnKey = 'slip' | 'employee' | 'period' | 'net' | 'status';
+  const columns = useMemo<Array<TableColumn<PayrollDetailRow, ColumnKey>>>(() => [
+    { key: 'slip', label: 'Nomor Slip', accessor: row => row.slip_number, defaultWidth: 220 },
+    { key: 'employee', label: 'Karyawan', accessor: row => `${row.employee_name} ${row.nik} ${row.position_name}`, defaultWidth: 330 },
+    { key: 'period', label: 'Periode', accessor: row => row.period, defaultWidth: 170 },
+    { key: 'net', label: 'Total Diterima', accessor: row => Number(row.net_salary), defaultWidth: 200 },
+    { key: 'status', label: 'Status', accessor: row => row.status, defaultWidth: 140 },
+  ], []);
+  const table = useDataTable({ tableId: 'payslips', rows, columns, initialPageSize: 20 });
   const selectedRows = useMemo(() => rows.filter(row => selected.has(row.id)), [rows, selected]);
 
   useEffect(() => {
@@ -95,19 +111,20 @@ export default function PayslipsPage() {
   }, [rows]);
 
   const toggleAll = () => {
-    setSelected(current => current.size === rows.length && rows.length
-      ? new Set()
-      : new Set(rows.map(row => row.id)));
-  };
-
-  const toggleOne = (id: string) => {
+    const ids = table.pageRows.map(row => row.id);
+    const allSelected = ids.every(id => selected.has(id));
     setSelected(current => {
       const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
       return next;
     });
   };
+
+  const toggleOne = (id: string) => setSelected(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const runSingle = async (row: PayrollDetailRow, action: 'pdf' | 'print') => {
     try {
@@ -122,8 +139,7 @@ export default function PayslipsPage() {
   const runBulk = async (targetRows: PayrollDetailRow[]) => {
     try {
       if (!targetRows.length) throw new Error('Pilih setidaknya satu slip.');
-      setExporting(true);
-      setProgress(0);
+      setExporting(true); setProgress(0);
       await exportPayslipsZip(targetRows, {
         logoUrl,
         baseUrl: location.origin,
@@ -133,16 +149,15 @@ export default function PayslipsPage() {
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
-      setExporting(false);
-      setProgress(0);
+      setExporting(false); setProgress(0);
     }
   };
 
   const runDataExport = async (kind: 'xlsx' | 'csv') => {
     try {
       if (!rows.length) throw new Error('Tidak ada slip untuk diekspor.');
-      if (kind === 'xlsx') await exportPayrollExcel(rows);
-      else await exportPayrollCsv(rows);
+      if (kind === 'xlsx') await exportPayrollExcel(table.sortedRows);
+      else await exportPayrollCsv(table.sortedRows);
       toast.success(`Export ${kind.toUpperCase()} selesai.`);
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -153,7 +168,7 @@ export default function PayslipsPage() {
     <>
       <PageHeader
         title="Slip Gaji"
-        description="Preview slip final, verifikasi QR, cetak, ekspor PDF, serta kemas beberapa atau seluruh slip ke ZIP."
+        description="Preview, QR verification, PDF, cetak, export ZIP, column visibility, resize, multi-sort, dan pagination."
         actions={
           <>
             <Button variant="secondary" onClick={() => void runDataExport('xlsx')}>
@@ -164,14 +179,10 @@ export default function PayslipsPage() {
             </Button>
             {can('payslip.export.bulk') && (
               <>
-                <Button
-                  variant="secondary"
-                  disabled={!selectedRows.length || exporting}
-                  onClick={() => void runBulk(selectedRows)}
-                >
+                <Button variant="secondary" disabled={!selectedRows.length || exporting} onClick={() => void runBulk(selectedRows)}>
                   <FileArchive className="size-4" /> ZIP Terpilih ({selectedRows.length})
                 </Button>
-                <Button disabled={!rows.length || exporting} onClick={() => void runBulk(rows)}>
+                <Button disabled={!rows.length || exporting} onClick={() => void runBulk(table.sortedRows)}>
                   <Download className="size-4" /> Export Semua
                 </Button>
               </>
@@ -181,92 +192,105 @@ export default function PayslipsPage() {
       />
 
       <Card>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.4fr_.7fr_.7fr_1fr_1fr_1fr]">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-            <Input className="pl-10" value={search} onChange={event => setSearch(event.target.value)} placeholder="Nama, NIK, atau nomor slip..." />
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.4fr_.7fr_.7fr_1fr_1fr_1fr]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+              <Input className="pl-10" value={search} onChange={event => setSearch(event.target.value)} placeholder="Nama, NIK, atau nomor slip..." />
+            </div>
+            <Select value={month} onChange={event => setMonth(event.target.value)}>
+              {Array.from({ length: 12 }, (_, index) => {
+                const value = String(index + 1).padStart(2, '0');
+                return <option key={value} value={value}>{new Date(2025, index, 1).toLocaleString('id-ID', { month: 'long' })}</option>;
+              })}
+            </Select>
+            <Input type="number" min="2020" max="2100" value={year} onChange={event => setYear(event.target.value)} />
+            <Select value={divisionId} onChange={event => setDivisionId(event.target.value)}>
+              <option value="">Semua Divisi</option>
+              {organization.data?.divisions.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </Select>
+            <Select value={positionId} onChange={event => setPositionId(event.target.value)}>
+              <option value="">Semua Jabatan</option>
+              {organization.data?.positions.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </Select>
+            <Select value={status} onChange={event => setStatus(event.target.value)}>
+              <option value="">Final & Dibayar</option>
+              <option value="finalized">Final</option>
+              <option value="paid">Dibayar</option>
+            </Select>
           </div>
-          <Select value={month} onChange={event => setMonth(event.target.value)}>
-            {Array.from({ length: 12 }, (_, index) => {
-              const value = String(index + 1).padStart(2, '0');
-              return <option key={value} value={value}>{new Date(2025, index, 1).toLocaleString('id-ID', { month: 'long' })}</option>;
-            })}
-          </Select>
-          <Input type="number" min="2020" max="2100" value={year} onChange={event => setYear(event.target.value)} />
-          <Select value={divisionId} onChange={event => setDivisionId(event.target.value)}>
-            <option value="">Semua Divisi</option>
-            {organization.data?.divisions.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </Select>
-          <Select value={positionId} onChange={event => setPositionId(event.target.value)}>
-            <option value="">Semua Jabatan</option>
-            {organization.data?.positions.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </Select>
-          <Select value={status} onChange={event => setStatus(event.target.value)}>
-            <option value="">Final & Dibayar</option>
-            <option value="finalized">Final</option>
-            <option value="paid">Dibayar</option>
-          </Select>
+          <div className="flex justify-end">
+            <ColumnVisibilityMenu columns={columns} visible={table.visible} onToggle={table.toggleColumn} onReset={table.reset} />
+          </div>
         </CardContent>
       </Card>
 
       <Card className="mt-5 overflow-hidden">
         {payrolls.isLoading ? (
           <TableSkeleton rows={8} columns={7} />
-        ) : rows.length ? (
-          <div className="overflow-x-auto">
-            <table className="data-table min-w-[1120px]">
-              <thead>
-                <tr>
-                  {can('payslip.export.bulk') && (
-                    <th className="w-12">
-                      <button type="button" aria-label="Pilih semua" onClick={toggleAll}>
-                        {selected.size === rows.length && rows.length ? <CheckSquare2 className="size-5 text-brand-600" /> : <Square className="size-5" />}
-                      </button>
-                    </th>
-                  )}
-                  <th>Nomor Slip</th><th>Karyawan</th><th>Periode</th><th>Total Diterima</th><th>Status</th><th className="w-56">Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(row => (
-                  <tr key={row.id}>
+        ) : table.pageRows.length ? (
+          <>
+            <div className="overflow-x-auto">
+              <table className="data-table table-fixed">
+                <thead>
+                  <tr>
                     {can('payslip.export.bulk') && (
-                      <td>
-                        <button type="button" aria-label={`Pilih ${row.slip_number}`} onClick={() => toggleOne(row.id)}>
-                          {selected.has(row.id) ? <CheckSquare2 className="size-5 text-brand-600" /> : <Square className="size-5 text-slate-400" />}
+                      <th className="w-12">
+                        <button type="button" aria-label="Pilih semua" onClick={toggleAll}>
+                          {table.pageRows.every(row => selected.has(row.id))
+                            ? <CheckSquare2 className="size-5 text-brand-600" />
+                            : <Square className="size-5" />}
                         </button>
-                      </td>
+                      </th>
                     )}
-                    <td className="font-mono text-xs font-bold text-brand-600">{row.slip_number}</td>
-                    <td>
-                      <p className="font-bold text-slate-900 dark:text-white">{row.employee_name}</p>
-                      <p className="text-xs text-slate-500">{row.nik} · {row.position_name}</p>
-                    </td>
-                    <td>{formatPeriod(row.period)}</td>
-                    <td className="font-black text-emerald-600">{formatCurrency(row.net_salary)}</td>
-                    <td><Badge variant={row.status === 'paid' ? 'success' : 'primary'}>{PAYROLL_STATUS_LABELS[row.status]}</Badge></td>
-                    <td>
-                      <div className="flex flex-wrap gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => setPreview(row)}><Eye className="size-3.5" /> Preview</Button>
-                        <Button variant="ghost" size="icon" onClick={() => void runSingle(row, 'pdf')} aria-label="Download PDF">
-                          <Download className="size-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => void runSingle(row, 'print')} aria-label="Cetak slip">
-                          <Printer className="size-4" />
-                        </Button>
-                      </div>
-                    </td>
+                    {table.visibleColumns.map(column => {
+                      const rule = table.sort.find(item => item.key === column.key);
+                      return (
+                        <ResizableSortHeader
+                          key={column.key}
+                          label={column.label}
+                          width={table.widths[column.key]}
+                          direction={rule?.direction}
+                          sortIndex={rule ? table.sort.indexOf(rule) : undefined}
+                          onSort={multi => table.toggleSort(column.key, multi)}
+                          onResize={width => table.resizeColumn(column.key, width)}
+                        />
+                      );
+                    })}
+                    <th className="w-56">Aksi</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {table.pageRows.map(row => (
+                    <tr key={row.id}>
+                      {can('payslip.export.bulk') && (
+                        <td>
+                          <button type="button" aria-label={`Pilih ${row.slip_number}`} onClick={() => toggleOne(row.id)}>
+                            {selected.has(row.id) ? <CheckSquare2 className="size-5 text-brand-600" /> : <Square className="size-5 text-slate-400" />}
+                          </button>
+                        </td>
+                      )}
+                      {table.visible.slip && <td className="font-mono text-xs font-bold text-brand-600">{row.slip_number}</td>}
+                      {table.visible.employee && <td><p className="font-bold">{row.employee_name}</p><p className="text-xs text-slate-500">{row.nik} · {row.position_name}</p></td>}
+                      {table.visible.period && <td>{formatPeriod(row.period)}</td>}
+                      {table.visible.net && <td className="font-black text-emerald-600">{formatCurrency(row.net_salary)}</td>}
+                      {table.visible.status && <td><Badge variant={row.status === 'paid' ? 'success' : 'primary'}>{PAYROLL_STATUS_LABELS[row.status]}</Badge></td>}
+                      <td>
+                        <div className="flex flex-wrap gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setPreview(row)}><Eye className="size-3.5" /> Preview</Button>
+                          <Button variant="ghost" size="icon" onClick={() => void runSingle(row, 'pdf')} aria-label="Download PDF"><Download className="size-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => void runSingle(row, 'print')} aria-label="Cetak slip"><Printer className="size-4" /></Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination page={table.page} pageCount={table.pageCount} pageSize={table.pageSize} totalRows={table.totalRows} onPage={table.setPage} onPageSize={table.setPageSize} />
+          </>
         ) : (
-          <EmptyState
-            icon={ReceiptText}
-            title="Slip gaji tidak ditemukan"
-            description="Slip hanya tersedia setelah payroll difinalisasi. Ubah filter atau finalisasi payroll terlebih dahulu."
-          />
+          <EmptyState icon={ReceiptText} title="Slip gaji tidak ditemukan" description="Slip tersedia setelah payroll difinalisasi." />
         )}
       </Card>
 
@@ -287,12 +311,7 @@ export default function PayslipsPage() {
       </Modal>
 
       <Modal open={exporting} onClose={() => undefined} title="Menyiapkan Export Massal" description="PDF dibuat satu per satu lalu dikemas otomatis ke dalam ZIP." size="sm">
-        <div className="py-6">
-          <ProgressBar value={progress} label="Progres Export" />
-          <p className="mt-4 text-center text-sm text-slate-500 dark:text-slate-400">
-            Jangan menutup tab hingga unduhan dimulai.
-          </p>
-        </div>
+        <div className="py-6"><ProgressBar value={progress} label="Progres Export" /><p className="mt-4 text-center text-sm text-slate-500">Jangan menutup tab hingga unduhan dimulai.</p></div>
       </Modal>
     </>
   );
