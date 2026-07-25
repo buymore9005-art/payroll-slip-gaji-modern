@@ -114,7 +114,7 @@ export function EmployeeFormModal({
   );
 
   const submit = form.handleSubmit(async values => {
-    await onSubmit(values, photo);
+    await onSubmit(values as EmployeePayload, photo);
   });
 
   return (
