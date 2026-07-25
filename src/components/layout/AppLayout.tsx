@@ -1,12 +1,21 @@
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
+import { RouteLoading } from '@/components/common/RouteLoading';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
+import { cn } from '@/lib/utils';
+
+const SIDEBAR_STORAGE_KEY = 'payroll-sidebar-collapsed';
 
 export function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true');
   const location = useLocation();
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
+  }, [collapsed]);
 
   useEffect(() => {
     const state = location.state as { accessDenied?: boolean } | null;
@@ -14,13 +23,22 @@ export function AppLayout() {
   }, [location.state]);
 
   return (
-    <div className="min-h-screen lg:pl-72">
-      <Sidebar open={mobileOpen} onClose={() => setMobileOpen(false)} />
+    <div className={cn(
+      'min-h-screen transition-[padding] duration-300 ease-out',
+      collapsed ? 'lg:pl-20' : 'lg:pl-72',
+    )}>
+      <Sidebar open={mobileOpen} collapsed={collapsed} onClose={() => setMobileOpen(false)} />
       <div className="min-h-screen">
-        <Topbar onMenu={() => setMobileOpen(true)} />
+        <Topbar
+          collapsed={collapsed}
+          onMenu={() => setMobileOpen(true)}
+          onToggleSidebar={() => setCollapsed(value => !value)}
+        />
         <main className="mx-auto w-full max-w-[1720px] p-4 sm:p-6 lg:p-8">
           <div className="page-enter">
-            <Outlet />
+            <Suspense fallback={<RouteLoading compact />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>
