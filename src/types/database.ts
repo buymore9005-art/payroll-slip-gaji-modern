@@ -20,6 +20,7 @@ export interface EmployeeRow {
   employment_status: EmploymentStatus; join_date: string; bank_account: string; bank_name: string;
   npwp: string; bpjs: string; basic_salary: number; fixed_allowance: number; variable_allowance: number;
   email: string; phone: string; photo_path: string | null; created_by: string | null; updated_by: string | null;
+  deleted_at: string | null; deleted_by: string | null; delete_reason: string;
   created_at: string; updated_at: string;
 }
 export interface EmployeeDirectoryRow extends EmployeeRow {
@@ -57,6 +58,13 @@ export interface DashboardSummary {
   divisions: Array<{ name: string; value: number }>;
   departments: Array<{ name: string; value: number }>;
   attendance: Array<{ label: string; value: number }>;
+  employee_summary: { active: number; archived: number; new_this_month: number };
+  payroll_summary: { draft: number; finalized: number; paid: number; cancelled: number };
+  attendance_summary: { present: number; sick: number; leave: number; absent: number; overtime: number };
+  recent_activity: Array<{
+    id: number; action: string; entity_type: string; description: string;
+    created_at: string; user_name: string | null;
+  }>;
 }
 export interface VerifiedPayslip {
   slip_number: string; period: string; employee_name: string; nik_masked: string; position_name: string;
