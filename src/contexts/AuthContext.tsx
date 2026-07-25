@@ -3,74 +3,184 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
+import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { createSingleFlight } from '@/lib/singleFlight';
 import { getProfile } from '@/services/auth.service';
 import type { ProfileRow } from '@/types/database';
 
-type AuthContextValue = {
+export type AuthStatus = 'initializing' | 'authenticated' | 'unauthenticated' | 'profile-error';
+
+type AuthState = {
   session: Session | null;
-  user: User | null;
   profile: ProfileRow | null;
+  status: AuthStatus;
+  profileError: string | null;
+};
+
+type AuthContextValue = AuthState & {
+  user: User | null;
   loading: boolean;
   refreshProfile: () => Promise<void>;
 };
 
+const PROFILE_CACHE_PREFIX = 'payroll-profile:';
+const loadProfileOnce = createSingleFlight(getProfile, userId => userId);
+
 export const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<ProfileRow | null>(null);
-  const [loading, setLoading] = useState(true);
+function readCachedProfile(userId: string): ProfileRow | null {
+  try {
+    const raw = sessionStorage.getItem(`${PROFILE_CACHE_PREFIX}${userId}`);
+    if (!raw) return null;
+    const profile = JSON.parse(raw) as ProfileRow;
+    return profile.id === userId ? profile : null;
+  } catch {
+    return null;
+  }
+}
 
-  const loadProfile = useCallback(async (userId: string | null) => {
-    if (!userId) {
-      setProfile(null);
+function cacheProfile(profile: ProfileRow) {
+  try {
+    sessionStorage.setItem(`${PROFILE_CACHE_PREFIX}${profile.id}`, JSON.stringify(profile));
+  } catch {
+    // Session storage only improves perceived speed; authentication remains functional without it.
+  }
+}
+
+function clearCachedProfile(userId?: string) {
+  if (!userId) return;
+  try {
+    sessionStorage.removeItem(`${PROFILE_CACHE_PREFIX}${userId}`);
+  } catch {
+    // Ignore storage restrictions.
+  }
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<AuthState>({
+    session: null,
+    profile: null,
+    status: 'initializing',
+    profileError: null,
+  });
+  const stateRef = useRef(state);
+  const generationRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const applySession = useCallback(async (
+    nextSession: Session | null,
+    options: { forceProfile?: boolean; event?: AuthChangeEvent } = {},
+  ) => {
+    const generation = ++generationRef.current;
+    const previous = stateRef.current;
+    const previousUserId = previous.session?.user.id;
+    const nextUserId = nextSession?.user.id;
+
+    if (!nextSession || !nextUserId) {
+      clearCachedProfile(previousUserId);
+      const unauthenticated: AuthState = {
+        session: null,
+        profile: null,
+        status: 'unauthenticated',
+        profileError: null,
+      };
+      stateRef.current = unauthenticated;
+      if (mountedRef.current) setState(unauthenticated);
       return;
     }
+
+    const sameUser = previousUserId === nextUserId;
+    if (sameUser && previous.profile && !options.forceProfile) {
+      const authenticated: AuthState = {
+        ...previous,
+        session: nextSession,
+        status: 'authenticated',
+        profileError: null,
+      };
+      stateRef.current = authenticated;
+      if (mountedRef.current) setState(authenticated);
+      return;
+    }
+
+    const cachedProfile = sameUser ? previous.profile : readCachedProfile(nextUserId);
+    const pending: AuthState = {
+      session: nextSession,
+      profile: cachedProfile,
+      status: cachedProfile ? 'authenticated' : 'initializing',
+      profileError: null,
+    };
+    stateRef.current = pending;
+    if (mountedRef.current) setState(pending);
+
     try {
-      setProfile(await getProfile(userId));
-    } catch {
-      setProfile(null);
+      const profile = await loadProfileOnce(nextUserId);
+      if (!mountedRef.current || generation !== generationRef.current) return;
+      cacheProfile(profile);
+      const authenticated: AuthState = {
+        session: nextSession,
+        profile,
+        status: 'authenticated',
+        profileError: null,
+      };
+      stateRef.current = authenticated;
+      setState(authenticated);
+    } catch (error) {
+      if (!mountedRef.current || generation !== generationRef.current) return;
+      const failed: AuthState = {
+        session: nextSession,
+        profile: cachedProfile,
+        status: cachedProfile ? 'authenticated' : 'profile-error',
+        profileError: error instanceof Error ? error.message : String(error),
+      };
+      stateRef.current = failed;
+      setState(failed);
     }
   }, []);
 
   const refreshProfile = useCallback(async () => {
-    await loadProfile(session?.user.id ?? null);
-  }, [loadProfile, session?.user.id]);
+    const currentSession = stateRef.current.session;
+    clearCachedProfile(currentSession?.user.id);
+    await applySession(currentSession, { forceProfile: true });
+  }, [applySession]);
 
   useEffect(() => {
-    let active = true;
-    void supabase.auth.getSession().then(async ({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      await loadProfile(data.session?.user.id ?? null);
-      if (active) setLoading(false);
-    });
+    mountedRef.current = true;
+    let disposed = false;
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       queueMicrotask(() => {
-        void loadProfile(nextSession?.user.id ?? null).finally(() => setLoading(false));
+        if (!disposed) void applySession(nextSession, { event });
       });
     });
 
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (disposed) return;
+      void applySession(error ? null : data.session, { event: 'INITIAL_SESSION' });
+    });
+
     return () => {
-      active = false;
-      subscription.subscription.unsubscribe();
+      disposed = true;
+      mountedRef.current = false;
+      generationRef.current += 1;
+      listener.subscription.unsubscribe();
     };
-  }, [loadProfile]);
+  }, [applySession]);
 
   const value = useMemo<AuthContextValue>(() => ({
-    session,
-    user: session?.user ?? null,
-    profile,
-    loading,
+    ...state,
+    user: state.session?.user ?? null,
+    loading: state.status === 'initializing',
     refreshProfile,
-  }), [loading, profile, refreshProfile, session]);
+  }), [refreshProfile, state]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
